@@ -53,15 +53,15 @@ def get_aqi(city, country=""):
     return pd.DataFrame(rows), None
 
 # === RECOMMEND ===
-def recommend(acts, df):
+def recommend(activities, df):
     res = []
-    for act in acts:
+    for act in activities:
         outdoor = any(w in act.lower() for w in ["outdoor","run","jog","cycle","bike","picnic","hike","walk","garden"])
         if outdoor:
-    good = df[df["aqi"] <= 2]["time"].tolist()
-    times = ", ".join(good) if good else "No safe time"
-else:
-    times = "Any time"
+            good = df[df["aqi"] <= 2]["time"].tolist()  # ← MUST BE INDENTED
+            times = ", ".join(good) if good else "No safe time"
+        else:
+            times = "Any time"
         res.append({"Activity": act, "Best Time": times})
     return pd.DataFrame(res)
 
