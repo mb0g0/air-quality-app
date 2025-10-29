@@ -66,6 +66,7 @@ def recommend(activities, df):
     return pd.DataFrame(res)
 
 # === RUN ===
+# === RUN ===
 if st.button("Get Best Times", type="primary"):
     if not activities:
         st.error("Add at least one activity")
@@ -76,45 +77,39 @@ if st.button("Get Best Times", type="primary"):
                 st.error(err)
             else:
                 st.success(f"Data loaded for **{city}**")
-                st.subheader("AQI Forecast")
-                # ← UPDATE THIS PART  (replace the old st.line_chart block)
-if df is not None:
-    st.success(f"Data loaded for **{city}**")
-    st.subheader("AQI Forecast (next 24 h)")
+                st.subheader("AQI Forecast (next 24 h)")
 
-    # ---- Colored bar chart ----
-    fig, ax = plt.subplots(figsize=(10, 4))
-    bars = ax.bar(df["time"], df["aqi"],
-                  color=[aqi_color(v) for v in df["aqi"]],
-                  edgecolor="black", linewidth=0.8)
+                # ---- Colored bar chart ----
+                fig, ax = plt.subplots(figsize=(10, 4))
+                bars = ax.bar(df["time"], df["aqi"],
+                              color=[aqi_color(v) for v in df["aqi"]],
+                              edgecolor="black", linewidth=0.8)
+                ax.set_ylim(0, 5)
+                ax.set_yticks([1,2,3,4,5])
+                ax.set_yticklabels(["Good","Fair","Moderate","Poor","Very Poor"])
+                ax.set_ylabel("AQI Level")
+                ax.set_xlabel("Time")
+                plt.xticks(rotation=45, ha="right")
+                plt.tight_layout()
+                st.pyplot(fig)
 
-    ax.set_ylim(0, 5)
-    ax.set_yticks([1,2,3,4,5])
-    ax.set_yticklabels(["Good","Fair","Moderate","Poor","Very Poor"])
-    ax.set_ylabel("AQI Level")
-    ax.set_xlabel("Time")
-    plt.xticks(rotation=45, ha="right")
-    plt.tight_layout()
-    st.pyplot(fig)
+                # ---- Caption legend ----
+                legend_html = """
+                <div style="display:flex; gap:12px; margin-top:8px; font-size:0.9rem;">
+                  <span style="background:#10b981;color:white;padding:2px 6px;border-radius:4px;">Good</span>
+                  <span style="background:#22c55e;color:white;padding:2px 6px;border-radius:4px;">Fair</span>
+                  <span style="background:#f59e0b;color:black;padding:2px 6px;border-radius:4px;">Moderate</span>
+                  <span style="background:#ef4444;color:white;padding:2px 6px;border-radius:4px;">Poor</span>
+                  <span style="background:#991b1b;color:white;padding:2px 6px;border-radius:4px;">Very Poor</span>
+                </div>
+                """
+                st.markdown(legend_html, unsafe_allow_html=True)
 
-    # ---- Caption legend ----
-    legend_html = """
-    <div style="display:flex; gap:12px; margin-top:8px; font-size:0.9rem;">
-      <span style="background:#10b981;color:white;padding:2px 6px;border-radius:4px;">Good</span>
-      <span style="background:#22c55e;color:white;padding:2px 6px;border-radius:4px;">Fair</span>
-      <span style="background:#f59e0b;color:black;padding:2px 6px;border-radius:4px;">Moderate</span>
-      <span style="background:#ef4444;color:white;padding:2px 6px;border-radius:4px;">Poor</span>
-      <span style="background:#991b1b;color:white;padding:2px 6px;border-radius:4px;">Very Poor</span>
-    </div>
-    """
-    st.markdown(legend_html, unsafe_allow_html=True)
-                st.subheader("Your Plan")
-                plan = recommend(activities, df)
-              # ← UPDATE THIS PART  (replace the old st.dataframe block)
+# ←←←← THIS IS OUTSIDE THE 'with' BLOCK (NO INDENT!)
 st.subheader("Your Plan")
 plan = recommend(activities, df)
 
-# Add a column with the *average* AQI for the suggested time slots
+# Add average AQI for coloring
 def avg_aqi(times_str: str) -> int:
     if "any time" in times_str.lower() or "no safe" in times_str.lower():
         return 0
@@ -124,7 +119,6 @@ def avg_aqi(times_str: str) -> int:
 
 plan["AQI"] = plan["Best Time"].apply(avg_aqi)
 
-# Helper to paint the whole row
 def color_row(row):
     if row["AQI"] == 0:
         return [""] * len(row)
@@ -133,11 +127,9 @@ def color_row(row):
 styled = plan.style.apply(color_row, axis=1).format({"AQI": "{:.0f}"})
 st.dataframe(styled, hide_index=True, use_container_width=True)
 
-# Download still works
 st.download_button(
     "Download Plan",
     plan.drop(columns=["AQI"]).to_csv(index=False),
     "plan.csv",
     "text/csv"
-)
-                st.download_button("📥 Download", plan.to_csv(index=False), "plan.csv", "text/csv")
+)           st.download_button("📥 Download", plan.to_csv(index=False), "plan.csv", "text/csv")
