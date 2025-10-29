@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime
-import matplotlib.pyplot as plt
 
 # === CONFIG ===
 st.set_page_config(page_title="Air Quality Planner", layout="centered")
