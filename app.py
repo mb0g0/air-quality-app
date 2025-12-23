@@ -1,60 +1,131 @@
-# app.py - Air Quality Activity Planner
-# Run locally with: streamlit run app.py
-
+# app.py - Air Quality Activity Planner with SQLite Database
 import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime
-import matplotlib.pyplot as plt  # ← REQUIRED FOR CHARTS
+import matplotlib.pyplot as plt
+import sqlite3
+import json
+
+# === DATABASE SETUP ===
+DB_FILE = "air_quality_plans.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            city TEXT NOT NULL,
+            country TEXT,
+            activities TEXT NOT NULL,
+            plan_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def save_plan(city: str, country: str, activities: list, plan_df: pd.DataFrame):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO plans (city, country, activities, plan_json)
+        VALUES (?, ?, ?, ?)
+    """, (city, country or "", json.dumps(activities), plan_df.to_json()))
+    conn.commit()
+    conn.close()
+    st.success("Plan saved to database!")
+
+def load_all_plans() -> pd.DataFrame:
+    conn = sqlite3.connect(DB_FILE)
+    df = pd.read_sql_query("SELECT id, city, country, activities, created_at FROM plans ORDER BY created_at DESC", conn)
+    conn.close()
+    if not df.empty:
+        df["activities"] = df["activities"].apply(lambda x: json.loads(x))
+    return df
+
+def load_plan_by_id(plan_id: int) -> tuple[pd.DataFrame, list, str, str]:
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT city, country, activities, plan_json FROM plans WHERE id = ?", (plan_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        city, country, activities_json, plan_json = row
+        activities = json.loads(activities_json)
+        plan_df = pd.read_json(plan_json)
+        return plan_df, activities, city, country or ""
+    return None, None, None, None
+
+# Initialize DB on app start
+init_db()
 
 # === PAGE SETUP ===
 st.set_page_config(page_title="Air Quality Planner", layout="centered")
-st.title("Air Quality Activity Planner")
+st.title("🌤️ Air Quality Activity Planner")
 st.markdown("Enter a city and your activities → get **best times** based on air quality.")
+
+# Sidebar for viewing history
+with st.sidebar:
+    st.header("📂 Saved Plans")
+    plans_df = load_all_plans()
+    if not plans_df.empty:
+        selected_id = st.selectbox(
+            "View a past plan",
+            options=plans_df["id"],
+            format_func=lambda pid: f"{plans_df[plans_df['id']==pid]['created_at'].iloc[0]} – {plans_df[plans_df['id']==pid]['city'].iloc[0]}"
+        )
+        if st.button("Load Selected Plan"):
+            plan, acts, city_name, country_name = load_plan_by_id(selected_id)
+            if plan is not None:
+                st.session_state["loaded_plan"] = plan
+                st.session_state["loaded_activities"] = acts
+                st.session_state["loaded_city"] = city_name
+                st.session_state["loaded_country"] = country_name
+                st.rerun()
+    else:
+        st.info("No saved plans yet.")
 
 # === USER INPUTS ===
 col1, col2 = st.columns(2)
 with col1:
-    city = st.text_input("City", value="London", placeholder="e.g., Tokyo")
+    city = st.text_input("City", value=st.session_state.get("loaded_city", "London"))
 with col2:
-    country = st.text_input("Country (optional)", value="UK", placeholder="e.g., JP")
+    country = st.text_input("Country (optional)", value=st.session_state.get("loaded_country", "UK"))
 
 activities_input = st.text_area(
     "Activities (one per line)",
-    value="Running outdoors\nPicnic in the park\nIndoor yoga\nCycling",
+    value="\n".join(st.session_state.get("loaded_activities", ["Running outdoors", "Picnic in the park", "Indoor yoga", "Cycling"])),
     height=130
 )
 activities = [line.strip() for line in activities_input.strip().split("\n") if line.strip()]
 
 # === AQI COLOR HELPER ===
 def aqi_color(aqi: int) -> str:
-    """Return hex color for AQI level 1-5"""
-    colors = ["#10b981", "#22c55e", "#f59e0b", "#ef4444", "#991b1b"]  # Good → Very Poor
-    return colors[aqi - 1]
+    colors = ["#10b981", "#22c55e", "#f59e0b", "#ef4444", "#991b1b"]
+    return colors[aqi - 1] if 1 <= aqi <= 5 else "#gray"
 
-# === FETCH AIR QUALITY DATA ===
-@st.cache_data(ttl=1800)  # Cache for 30 minutes
+# === FETCH AIR QUALITY DATA (Direct from OpenWeatherMap using secrets) ===
+@st.cache_data(ttl=1800)
 def get_aqi_data(city_name: str, country_code: str = "") -> tuple:
-    api_key = st.secrets.get("OPENWEATHER_API_KEY")
-    if not api_key:
-        return None, "Missing API key. Add to `.streamlit/secrets.toml` (local) or Streamlit Secrets (cloud)."
-
-    # Step 1: Geocode city
+    api_key = st.secrets["OPENWEATHER_API_KEY"]
+    
+    # Geocode
     geo_url = "http://api.openweathermap.org/geo/1.0/direct"
     geo_params = {"q": f"{city_name},{country_code}", "limit": 1, "appid": api_key}
     try:
         geo_data = requests.get(geo_url, params=geo_params).json()
         if not geo_data:
-            return None, "City not found. Try adding country code."
+            return None, "City not found."
         lat, lon = geo_data[0]["lat"], geo_data[0]["lon"]
-    except Exception:
-        return None, "Failed to find city."
+    except:
+        return None, "Geocoding failed."
 
-    # Step 2: Get AQI forecast
+    # AQI Forecast
     aqi_url = "http://api.openweathermap.org/data/2.5/air_pollution/forecast"
     aqi_params = {"lat": lat, "lon": lon, "appid": api_key}
     try:
-        raw_data = requests.get(aqi_url, params=aqi_params).json()["list"][:24]  # Next 24h
+        raw_data = requests.get(aqi_url, params=aqi_params).json()["list"][:24]
         rows = []
         for entry in raw_data:
             dt = datetime.fromtimestamp(entry["dt"])
@@ -63,16 +134,14 @@ def get_aqi_data(city_name: str, country_code: str = "") -> tuple:
             time_str = dt.strftime("%I %p").lstrip("0")
             rows.append({"time": time_str, "aqi": aqi, "level": level})
         return pd.DataFrame(rows), None
-    except Exception:
-        return None, "Failed to fetch air quality data."
+    except:
+        return None, "Failed to fetch AQI data."
 
 # === RECOMMEND BEST TIMES ===
 def recommend_times(activities_list: list, df: pd.DataFrame) -> pd.DataFrame:
     results = []
     for activity in activities_list:
-        is_outdoor = any(word in activity.lower() for word in [
-            "outdoor", "run", "jog", "cycle", "bike", "picnic", "hike", "walk", "garden"
-        ])
+        is_outdoor = any(word in activity.lower() for word in ["outdoor", "run", "jog", "cycle", "bike", "picnic", "hike", "walk", "garden"])
         if is_outdoor:
             good_times = df[df["aqi"] <= 2]["time"].tolist()
             best_time = ", ".join(good_times) if good_times else "No safe time"
@@ -81,7 +150,7 @@ def recommend_times(activities_list: list, df: pd.DataFrame) -> pd.DataFrame:
         results.append({"Activity": activity, "Best Time": best_time})
     return pd.DataFrame(results)
 
-# === MAIN APP LOGIC ===
+# === MAIN LOGIC ===
 if st.button("Get Best Times", type="primary"):
     if not activities:
         st.error("Please enter at least one activity.")
@@ -93,18 +162,12 @@ if st.button("Get Best Times", type="primary"):
             else:
                 st.success(f"Data loaded for **{city}**")
 
-                # === AQI FORECAST CHART ===
+                # Chart
                 st.subheader("AQI Forecast (Next 24 Hours)")
                 fig, ax = plt.subplots(figsize=(11, 4.5))
-                ax.bar(
-                    df["time"],
-                    df["aqi"],
-                    color=[aqi_color(val) for val in df["aqi"]],
-                    edgecolor="black",
-                    linewidth=0.7
-                )
+                ax.bar(df["time"], df["aqi"], color=[aqi_color(v) for v in df["aqi"]], edgecolor="black")
                 ax.set_ylim(0, 5)
-                ax.set_yticks([1, 2, 3, 4, 5])
+                ax.set_yticks([1,2,3,4,5])
                 ax.set_yticklabels(["Good", "Fair", "Moderate", "Poor", "Very Poor"])
                 ax.set_ylabel("AQI Level")
                 ax.set_xlabel("Time")
@@ -112,49 +175,47 @@ if st.button("Get Best Times", type="primary"):
                 plt.tight_layout()
                 st.pyplot(fig)
 
-                # === COLOR LEGEND ===
-                legend_html = """
-                <div style="display:flex; gap:12px; margin:12px 0; font-size:0.9rem; font-weight:500;">
+                # Legend
+                st.markdown("""
+                <div style="display:flex; gap:12px; margin:12px 0;">
                   <span style="background:#10b981;color:white;padding:3px 8px;border-radius:4px;">Good</span>
                   <span style="background:#22c55e;color:white;padding:3px 8px;border-radius:4px;">Fair</span>
                   <span style="background:#f59e0b;color:black;padding:3px 8px;border-radius:4px;">Moderate</span>
                   <span style="background:#ef4444;color:white;padding:3px 8px;border-radius:4px;">Poor</span>
                   <span style="background:#991b1b;color:white;padding:3px 8px;border-radius:4px;">Very Poor</span>
                 </div>
-                <p style="margin-top:6px; font-size:0.85rem; color:#666;">
-                  <strong>Best</strong> → Green (Good/Fair) | <strong>Worst</strong> → Red (Poor/Very Poor)
-                </p>
-                """
-                st.markdown(legend_html, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
 
-                # === RECOMMENDATION TABLE ===
+                # Recommendation Table
                 st.subheader("Your Activity Plan")
                 plan = recommend_times(activities, df)
-
-                # Add average AQI for row coloring
-                def get_avg_aqi(time_str: str) -> int:
-                    if "any time" in time_str.lower() or "no safe" in time_str.lower():
-                        return 0
-                    times = [t.strip() for t in time_str.split(",")]
-                    matching = df[df["time"].isin(times)]["aqi"]
-                    return int(matching.mean()) if not matching.empty else 0
-
-                plan["AQI"] = plan["Best Time"].apply(get_avg_aqi)
-
-                # Style rows
+                
                 def style_row(row):
-                    if row["AQI"] == 0:
-                        return [""] * len(row)
-                    return [f"background-color: {aqi_color(row['AQI'])}"] * len(row)
-
-                styled_plan = plan.style.apply(style_row, axis=1).format({"AQI": "{:.0f}"})
+                    avg_aqi = df[df["time"].isin(row["Best Time"].split(", "))]["aqi"].mean() if "Any time" not in row["Best Time"] else 0
+                    color = aqi_color(int(avg_aqi)) if avg_aqi > 0 else ""
+                    return [f"background-color: {color}"] * len(row)
+                
+                styled_plan = plan.style.apply(style_row, axis=1)
                 st.dataframe(styled_plan, hide_index=True, use_container_width=True)
 
-                # === DOWNLOAD CSV ===
-                csv_data = plan.drop(columns=["AQI"]).to_csv(index=False).encode()
-                st.download_button(
-                    label="Download Plan as CSV",
-                    data=csv_data,
-                    file_name=f"activity_plan_{city.lower()}.csv",
-                    mime="text/csv"
-                )
+                # Save to DB + Download
+                col_save, col_dl = st.columns(2)
+                with col_save:
+                    if st.button("💾 Save This Plan to Database"):
+                        save_plan(city, country, activities, plan)
+                with col_dl:
+                    csv = plan.to_csv(index=False).encode()
+                    st.download_button(
+                        "Download CSV",
+                        csv,
+                        f"plan_{city.lower()}_{datetime.now().strftime('%Y%m%d')}.csv",
+                        "text/csv"
+                    )
+
+                # Show loaded plan if any
+                if "loaded_plan" in st.session_state:
+                    st.info("You are viewing a previously saved plan.")
+                    del st.session_state["loaded_plan"]
+                    del st.session_state["loaded_activities"]
+                    del st.session_state["loaded_city"]
+                    del st.session_state["loaded_country"]
