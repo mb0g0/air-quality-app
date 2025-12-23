@@ -28,14 +28,22 @@ def init_db():
     conn.close()
 
 def save_plan(city: str, country: str, activities: list, plan_df: pd.DataFrame):
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=10)
     cursor = conn.cursor()
+    
+    # Force immediate write and better isolation
+    cursor.execute("PRAGMA synchronous = FULL")  # Ensures data is written to disk
+    cursor.execute("PRAGMA journal_mode = WAL")  # Better for concurrent access
+    
     cursor.execute("""
         INSERT INTO plans (city, country, activities, plan_json)
         VALUES (?, ?, ?, ?)
     """, (city, country or "", json.dumps(activities), plan_df.to_json()))
-    conn.commit()
+    
+    conn.commit()        # Save changes
+    conn.execute("PRAGMA wal_checkpoint(FULL)")  # Force write-ahead log to disk
     conn.close()
+    
     st.success("✅ Plan saved to database!")
 
 def load_all_plans() -> pd.DataFrame:
