@@ -67,7 +67,7 @@ st.set_page_config(page_title="Air Quality Planner", layout="centered")
 st.title("🌤️ Air Quality Activity Planner")
 st.markdown("Enter a city and your planned activities — get the **best times** based on air quality forecast.")
 
-# === SIDEBAR: View Saved Plans ===
+# === SIDEBAR: View Saved Plans + Download Database ===
 with st.sidebar:
     st.header("📂 Saved Plans")
     plans_history = load_all_plans()
@@ -87,6 +87,27 @@ with st.sidebar:
                 st.rerun()
     else:
         st.info("No saved plans yet. Generate and save one!")
+
+    # === DOWNLOAD DATABASE FILE ===
+    st.markdown("---")
+    st.subheader("💾 Database Backup")
+    
+    try:
+        with open(DB_FILE, "rb") as db_file:
+            db_bytes = db_file.read()
+        
+        st.download_button(
+            label="📥 Download Database File (air_quality_plans.db)",
+            data=db_bytes,
+            file_name="air_quality_plans.db",
+            mime="application/octet-stream",
+            help="Download the full SQLite database file. Open it with DB Browser for SQLite or any SQLite tool."
+        )
+        st.info(f"Database size: {len(db_bytes) / 1024:.1f} KB")
+    except FileNotFoundError:
+        st.warning("Database file not created yet. Save at least one plan first.")
+    except Exception as e:
+        st.error(f"Error reading database: {e}")
 
 # === USER INPUTS ===
 col1, col2 = st.columns(2)
